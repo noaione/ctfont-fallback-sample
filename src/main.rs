@@ -6,6 +6,7 @@ mod simul;
 fn main() {
     let core_text = CoreTextFontProvider::new().unwrap();
 
+    println!("Found {} fonts", core_text.fonts().len());
     let result = core_text
         .fallback(&crate::simul::FontFallbackRequest {
             families: vec![Box::from("Helvetica")],
