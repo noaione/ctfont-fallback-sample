@@ -1,4 +1,7 @@
-use std::{ptr::NonNull, sync::Arc};
+use std::{
+    ptr::NonNull,
+    sync::{Arc, LazyLock, Once, OnceLock},
+};
 
 use objc2_core_foundation::{
     CFArray, CFDictionary, CFNumber, CFRange, CFRetained, CFString, CFType, CGAffineTransform,
@@ -14,6 +17,32 @@ use sbr_util::math::I16Dot16;
 use thiserror::Error;
 
 use crate::simul::{FaceInfo, PlatformFontProvider};
+
+const CSS_WEIGHTS: [i32; 9] = [100, 200, 300, 400, 500, 600, 700, 800, 900];
+
+type NSFontWeight = f64;
+
+macro_rules! define_nsweights {
+    ($($c_bind:ident => $name:ident,)*) => {
+        extern "C" {
+            $(pub static $c_bind: NSFontWeight;)*
+        }
+
+        $(static $name: LazyLock<NSFontWeight> = LazyLock::new(|| unsafe { $c_bind });)*
+    }
+}
+
+define_nsweights!(
+    NSFontWeightUltraLight => ULTRA_LIGHT,
+    NSFontWeightThin => THIN,
+    NSFontWeightLight => LIGHT,
+    NSFontWeightRegular => REGULAR,
+    NSFontWeightMedium => MEDIUM,
+    NSFontWeightSemibold => SEMIBOLD,
+    NSFontWeightBold => BOLD,
+    NSFontWeightHeavy => HEAVY,
+    NSFontWeightBlack => BLACK,
+);
 
 fn codepoint_to_utf16(mut value: u32) -> ([u16; 2], usize) {
     if value < 0x10000 {
@@ -93,37 +122,52 @@ pub struct CoreTextFontProvider {
     fonts: Vec<FaceInfo>,
 }
 
+/// Un-normalize the weight to CSS weight.
+///
+/// This utilize the real NSFontWeight constants to find which weight the
+/// given weight is closest to. This is to ensure we are as accurate as possible.
 fn normalized_weight_to_css_weight(weight: f64) -> i32 {
-    // Scale the f64 to an integer for matching.
-    let scaled_weight = (weight * 100.0).round() as i32;
+    let constants_sizes = [
+        *ULTRA_LIGHT, // 100
+        *THIN,        // 200
+        *LIGHT,       // 300
+        *REGULAR,     // 400
+        *MEDIUM,      // 500
+        *SEMIBOLD,    // 600
+        *BOLD,        // 700
+        *HEAVY,       // 800
+        *BLACK,       // 900
+    ];
 
-    match scaled_weight {
-        80..=100 => 900,
-        60..=79 => 800,
-        40..=59 => 700,
-        20..=39 => 600,
-        1..=19 => 500,
-        -19..=0 => 400,
-        -39..=-20 => 300,
-        -59..=-40 => 200,
-        -79..=-60 => 100,
-        _ => 400, // Default to normal weight if out of range
-    }
+    // find the closest weight in the constants_sizes
+    let closest = constants_sizes.iter().enumerate().min_by(|(_, a), (_, b)| {
+        let a_diff = (weight - *a).abs();
+        let b_diff = (weight - *b).abs();
+        a_diff
+            .partial_cmp(&b_diff)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    closest.map(|(index, _)| CSS_WEIGHTS[index]).unwrap_or(400) // Default to 400 if no match found
 }
 
+/// Convert CSS weight to normalized weight.
+///
+/// We use the NSFontWeight constants to manually map the CSS weights to normalized weights.
+///
+/// Verified in Swift/Objective-C in macOS 26.0
 fn css_weight_to_normalized(weight: i32) -> f64 {
     // Convert CSS weight to normalized weight
     match weight {
-        100 => -0.8,
-        200 => -0.6,
-        300 => -0.4,
-        400 => 0.0,
-        500 => 0.23,
-        600 => 0.3,
-        700 => 0.4,
-        800 => 0.6,
-        900 => 0.8,
-        _ => 0.0, // Default to normal weight if out of range
+        100 => *ULTRA_LIGHT,
+        200 => *THIN,
+        300 => *LIGHT,
+        400 => *REGULAR,
+        500 => *MEDIUM,
+        600 => *SEMIBOLD,
+        700 => *BOLD,
+        800 => *HEAVY,
+        900 => *BLACK,
+        _ => *REGULAR, // Default to normal weight if out of range
     }
 }
 
@@ -566,3 +610,36 @@ impl PlatformFontProvider for CoreTextFontProvider {
 // Should be fine? Since it's only holding FaceInfo
 unsafe impl Send for CoreTextFontProvider {}
 unsafe impl Sync for CoreTextFontProvider {}
+
+#[cfg(test)]
+mod tests {
+    use super::{css_weight_to_normalized, normalized_weight_to_css_weight};
+
+    #[test]
+    fn test_css_weight_to_normalized() {
+        fn round_two(digits: f64) -> f64 {
+            // round -0.800000011920929 to -0.8
+            // round 0.23000000417232513 to 0.23
+            (digits * 100.0).round() / 100.0
+        }
+
+        let weights = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 50];
+        let expected_results = [-0.8, -0.6, -0.4, 0.0, 0.23, 0.3, 0.4, 0.56, 0.62, 0.0, 0.0];
+
+        for (weight, expected) in weights.iter().zip(expected_results.iter()) {
+            let result = css_weight_to_normalized(*weight);
+            assert_eq!(round_two(result), *expected, "Weight: {}", weight);
+        }
+    }
+
+    #[test]
+    fn test_normalized_weight_to_css_weight() {
+        let weights = [-1.0, -0.8, -0.6, -0.4, 0.0, 0.23, 0.3, 0.4, 0.56, 0.62, 1.0];
+        let expected_results = [100, 100, 200, 300, 400, 500, 600, 700, 800, 900, 900];
+
+        for (weight, expected) in weights.iter().zip(expected_results.iter()) {
+            let result = normalized_weight_to_css_weight(*weight);
+            assert_eq!(result, *expected, "Weight: {} | Result: {}", weight, result);
+        }
+    }
+}
