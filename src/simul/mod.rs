@@ -54,6 +54,7 @@ pub enum FallbackError {
 }
 
 #[non_exhaustive]
+#[expect(dead_code)]
 #[derive(Debug)]
 pub enum SubstituteError {
     Error,
@@ -65,6 +66,7 @@ pub trait PlatformFontProvider: Debug + Send + Sync {
     //     Ok(false)
     // }
 
+    #[expect(dead_code)]
     fn substitute(&self, request: &mut FaceRequest) -> Result<(), SubstituteError>;
     fn fonts(&self) -> &[FaceInfo];
     fn fallback(&self, request: &FontFallbackRequest) -> Result<Vec<FaceInfo>, FallbackError>;

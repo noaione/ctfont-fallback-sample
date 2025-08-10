@@ -160,15 +160,9 @@ impl CoreTextFontProvider {
         font: &CFRetained<CTFont>,
     ) -> Option<CFRetained<CFArray<CFDictionary<CFString, CFType>>>> {
         let variation_axes = unsafe { font.variation_axes() };
-        if let Some(axes) = variation_axes {
-            unsafe {
-                Some(CFRetained::cast_unchecked::<
-                    CFArray<CFDictionary<CFString, CFType>>,
-                >(axes))
-            }
-        } else {
-            None
-        }
+        variation_axes.map(|axes| unsafe {
+            CFRetained::cast_unchecked::<CFArray<CFDictionary<CFString, CFType>>>(axes)
+        })
     }
 
     fn descriptor_to_variable_axes(
@@ -285,7 +279,7 @@ impl CoreTextFontProvider {
                     let weight_value = match weight.downcast::<CFNumber>() {
                         Ok(weight_number) => weight_number
                             .as_f64()
-                            .ok_or_else(|| NewError::NumberConversion("kCTFontWeightTrait"))?,
+                            .ok_or(NewError::NumberConversion("kCTFontWeightTrait"))?,
                         Err(_) => {
                             return Err(NewError::DowncastError(
                                 "CFType",
@@ -306,7 +300,7 @@ impl CoreTextFontProvider {
                         Ok(ital_val) => {
                             ital_val
                                 .as_f64()
-                                .ok_or_else(|| NewError::NumberConversion("kCTFontSlantTrait"))?
+                                .ok_or(NewError::NumberConversion("kCTFontSlantTrait"))?
                                 != 0.0 // non-zero should be italic, although this is very naive
                         }
                         Err(_) => {
@@ -430,10 +424,11 @@ impl CoreTextFontProvider {
         unsafe {
             let descriptor = font.font_descriptor();
 
-            Self::font_from_descriptor(descriptor, Some(font)).map_err(|e| FallbackError::from(e))
+            Self::font_from_descriptor(descriptor, Some(font)).map_err(FallbackError::from)
         }
     }
 
+    #[expect(dead_code)]
     fn substitute_family(family: &str) -> &'static [&'static str] {
         match family {
             // Use the one in mac
@@ -448,7 +443,7 @@ impl CoreTextFontProvider {
 
     fn make_font_info(
         &self,
-        name: &Box<str>,
+        name: &str,
         style: &crate::simul::FontStyle,
     ) -> Result<CFRetained<CTFont>, FallbackError> {
         unsafe {
@@ -461,7 +456,7 @@ impl CoreTextFontProvider {
                 FallbackError::I32ToCFNumber("weight", style.weight.round_to_inner())
             })?;
             let italic = CFNumber::new_f64(if style.italic { 1.0 } else { 0.0 });
-            let italic_n = italic.downcast_ref::<CFNumber>().ok_or_else(|| {
+            let italic_n = italic.downcast_ref::<CFNumber>().ok_or({
                 FallbackError::I32ToCFNumber("italic", if style.italic { 1 } else { 0 })
             })?;
 
@@ -554,8 +549,7 @@ impl PlatformFontProvider for CoreTextFontProvider {
             let primary_font = self.make_font_info(&helvetica, &request.style)?;
 
             let (utf16, _) = codepoint_to_utf16(request.codepoint);
-            let string_data =
-                String::from_utf16(&utf16).map_err(|e| FallbackError::GlyphConversion(e))?;
+            let string_data = String::from_utf16(&utf16).map_err(FallbackError::GlyphConversion)?;
             let cf_string = CFString::from_str(&string_data);
             let str_range = CFRange::new(0, cf_string.length());
             let recommended_font = unsafe { primary_font.for_string(&cf_string, str_range) };
