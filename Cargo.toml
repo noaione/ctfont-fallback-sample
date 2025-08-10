@@ -4,8 +4,25 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-objc2-core-foundation = "0.3.1"
-objc2-core-text = "0.3.1"
+objc2-core-foundation = { version = "0.3.1", default-features = false, features = [
+    "std",
+    "CFArray",
+    "CFDictionary",
+    "CFNumber",
+    "CFString",
+    "objc2",
+] }
+objc2-core-text = { version = "0.3.1", default-features = false, features = [
+    "std",
+    "CTFont",
+    "CTFontCollection",
+    "CTFontDescriptor",
+    "CTFontManager",
+    "CTFontTraits",
+    "objc2",
+    "objc2-core-graphics",
+] }
+
 thiserror = "2"
 
 sbr-util = { git = "https://github.com/afishhh/subrandr.git", rev = "050e094753cc9b2a01ca975e7a9752a336ba6345" }
