@@ -1,14 +1,14 @@
 use std::{ptr::NonNull, sync::Arc};
 
 use objc2_core_foundation::{
-    CFArray, CFDictionary, CFNumber, CFRange, CFRetained, CFString, CFType, CFURL,
-    CGAffineTransform,
+    CFArray, CFDictionary, CFNumber, CFRange, CFRetained, CFString, CFType, CGAffineTransform,
+    CFURL,
 };
 use objc2_core_text::{
-    CTFont, CTFontCollection, CTFontDescriptor, CTFontManagerCreateFontDescriptorsFromURL,
-    kCTFontFamilyNameAttribute, kCTFontSlantTrait, kCTFontTraitsAttribute, kCTFontURLAttribute,
-    kCTFontVariationAxisMaximumValueKey, kCTFontVariationAxisMinimumValueKey,
-    kCTFontVariationAxisNameKey, kCTFontWeightTrait,
+    kCTFontFamilyNameAttribute, kCTFontNameAttribute, kCTFontSlantTrait, kCTFontTraitsAttribute,
+    kCTFontURLAttribute, kCTFontVariationAxisMaximumValueKey, kCTFontVariationAxisMinimumValueKey,
+    kCTFontVariationAxisNameKey, kCTFontWeightTrait, CTFont, CTFontCollection, CTFontDescriptor,
+    CTFontManagerCreateFontDescriptorsFromURL,
 };
 use sbr_util::math::I16Dot16;
 use thiserror::Error;
@@ -28,6 +28,30 @@ fn codepoint_to_utf16(mut value: u32) -> ([u16; 2], usize) {
             2,
         )
     }
+}
+
+fn deduplicate_fonts_results(fonts: Vec<FaceInfo>) -> Vec<FaceInfo> {
+    // we don't want to include family names that are already in the list
+    // and have the same width/weight/italic (we ignore source for now)
+    let mut seen = std::collections::HashSet::new();
+    fonts
+        .into_iter()
+        .filter(|font| {
+            let family_names = font.family_names.join(",");
+            let width = match &font.width {
+                crate::simul::FontAxisValues::Fixed(value) => value.to_string(),
+                crate::simul::FontAxisValues::Range(min, max) => format!("{}-{}", min, max),
+            };
+            let weight = match &font.weight {
+                crate::simul::FontAxisValues::Fixed(value) => value.to_string(),
+                crate::simul::FontAxisValues::Range(min, max) => format!("{}-{}", min, max),
+            };
+            let italic = font.italic.to_string();
+            let key = format!("{}|{}|{}|{}", family_names, width, weight, italic);
+
+            seen.insert(key)
+        })
+        .collect()
 }
 
 #[derive(Debug, Error)]
@@ -128,7 +152,7 @@ impl CoreTextFontProvider {
         };
 
         Ok(Self {
-            fonts: font_collected,
+            fonts: deduplicate_fonts_results(font_collected),
         })
     }
 
@@ -161,6 +185,11 @@ impl CoreTextFontProvider {
 
     fn get_face_index(current: &CFRetained<CTFontDescriptor>, font_url: &CFRetained<CFURL>) -> i32 {
         unsafe {
+            let current_name = current.attribute(kCTFontNameAttribute).and_then(|name| {
+                let downcast = name.downcast_ref::<CFString>();
+                downcast.map(|s| s.to_string())
+            });
+
             let font_descriptors = CTFontManagerCreateFontDescriptorsFromURL(font_url);
             if let Some(descriptors) = font_descriptors {
                 if descriptors.is_empty() {
@@ -176,8 +205,13 @@ impl CoreTextFontProvider {
 
                 // iterate through the descriptors to find the index
                 for (index, descriptor) in remapped.iter().enumerate() {
-                    if &descriptor == current {
-                        return index as i32; // Return the index of the matching descriptor
+                    let descriptor_name =
+                        descriptor.attribute(kCTFontNameAttribute).and_then(|name| {
+                            let downcast = name.downcast_ref::<CFString>();
+                            downcast.map(|s| s.to_string())
+                        });
+                    if descriptor_name == current_name {
+                        return index as i32;
                     }
                 }
             }
@@ -531,7 +565,7 @@ impl PlatformFontProvider for CoreTextFontProvider {
             }
         }
 
-        Ok(included_fallbacks)
+        Ok(deduplicate_fonts_results(included_fallbacks))
     }
 }
 
