@@ -1,5 +1,7 @@
 use std::{fmt::Debug, path::PathBuf, sync::Arc};
 
+use thiserror::Error;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FontFallbackRequest {
     pub families: Vec<Box<str>>,
@@ -40,16 +42,15 @@ pub enum FontAxisValues {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum FontSource {
-    File {
-        path: PathBuf,
-        index: i32,
-    },
+    File { path: PathBuf, index: i32 },
 }
 
 #[non_exhaustive]
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum FallbackError {
-    Error,
+    #[error(transparent)]
+    #[cfg(target_os = "macos")]
+    CoreText(#[from] crate::font_provider::FallbackError),
 }
 
 #[non_exhaustive]
